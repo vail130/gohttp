@@ -192,7 +192,7 @@ func (app *Application) ParseArgs() error {
 	inputFilePath := app.getOption(inputFlagMap, "")
 	inputFileSize := int64(0)
 	outputFilePath := app.getOption(outputFlagMap, app.ResponsePath)
-	jsonContentType := app.getOption(jsonFlagMap, "")
+	jsonContentType := app.flagIsActive(jsonFlagMap)
 	contentType := app.getOption(contentTypeFlagMap, "application/json")
 
 	if inputFilePath != "" {
@@ -203,7 +203,7 @@ func (app *Application) ParseArgs() error {
 		}
 	}
 	requestContentType := ""
-	if jsonContentType != "" {
+	if jsonContentType {
 		requestContentType = "application/json"
 	}
 	if contentType != "" {
