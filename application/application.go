@@ -23,8 +23,7 @@ type Application struct {
 	RequestMethods []string
 	Args           []string
 	Mode           string
-	RequestPath    string
-	ResponsePath   string
+	HistoryPath    string
 	InputFilePath  string
 	OutputFilePath string
 	Request        Request
@@ -91,7 +90,7 @@ func (app *Application) getOption(optMap map[string]bool, defaultValue string) s
 }
 
 // Save object to a file
-func (app *Application) save(savePath string, prefix string, v interface{}) error {
+func (app *Application) save(savePath string, name string, v interface{}) error {
 	jsonBytes, err := json.Marshal(v)
 	if err != nil {
 		return errors.New("Error creating response json: " + err.Error())
@@ -102,11 +101,11 @@ func (app *Application) save(savePath string, prefix string, v interface{}) erro
 	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
 	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
 	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	fileName := prefix + cleanTime + ".json"
+	fileName := cleanTime + "__" + name + ".json"
 
 	file, err := os.Create(path.Join(savePath, fileName))
 	if err != nil {
-		return errors.New("Error creating new " + prefix + " file: " + err.Error())
+		return errors.New("Error creating new " + name + " file: " + err.Error())
 	}
 	defer file.Close()
 
@@ -124,36 +123,29 @@ func (app *Application) save(savePath string, prefix string, v interface{}) erro
 
 // Make sure application dependency directories exist
 func (app *Application) SetupAppDirs() error {
-	err := os.MkdirAll(app.RequestPath, 0777)
+	err := os.MkdirAll(app.HistoryPath, 0777)
 	if err != nil {
-		return errors.New("Failed to create directory " + app.RequestPath + "\n" + err.Error())
+		return errors.New("Failed to create directory " + app.HistoryPath + "\n" + err.Error())
 	}
-
-	err = os.MkdirAll(app.ResponsePath, 0777)
-	if err != nil {
-		return errors.New("Failed to create directory " + app.ResponsePath + "\n" + err.Error())
-	}
-
 	return nil
 }
 
 // Determine desired operation
 func (app *Application) DetermineMode() error {
 	if len(app.Args) < 1 {
-		return errors.New("Invalid arguments. Try 'gohttp help' for usage details.")
-	}
+		app.Mode = "help"
+	} else {
+		for i, j := 0, len(app.Commands); i < j; i++ {
+			if app.Args[0] == app.Commands[i] {
+				app.Mode = app.Args[0]
+				break
+			}
+		}
 
-	for i, j := 0, len(app.Commands); i < j; i++ {
-		if app.Args[0] == app.Commands[i] {
-			app.Mode = app.Args[0]
-			break
+		if app.Mode == "" {
+			app.Mode = "http"
 		}
 	}
-
-	if app.Mode == "" {
-		app.Mode = "http"
-	}
-
 	return nil
 }
 
@@ -169,9 +161,9 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	gohttp COMMAND OPTIONS")
 	fmt.Println("")
 	fmt.Println("Commands:")
-	fmt.Println("	version")
 	fmt.Println("	help")
-	fmt.Println("	history")
+	fmt.Println("	version")
+	fmt.Println("	history FLAGS")
 	fmt.Println("	URL FLAGS")
 	fmt.Println("	get URL FLAGS")
 	fmt.Println("	head URL FLAGS")
@@ -180,7 +172,10 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	patch URL FLAGS")
 	fmt.Println("	delete URL FLAGS")
 	fmt.Println("")
-	fmt.Println("Flags:")
+	fmt.Println("History Flags:")
+	fmt.Println("	")
+	fmt.Println("")
+	fmt.Println("HTTP Request Flags:")
 	fmt.Println("	-j | --json")
 	fmt.Println("	(-c | --content-type) application/json")
 	fmt.Println("	(-t | --timeout) 0 - 4294967295")
@@ -192,6 +187,14 @@ func (app *Application) RunHelp() error {
 
 // Show reverse chronological requests/responses
 func (app *Application) ShowHistory() error {
+	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
+	if err != nil {
+		return errors.New("Failed to read history directory: " + err.Error())
+	}
+
+	for i, j := 0, len(fileInfos); i < j; i++ {
+		fmt.Println(fileInfos[i].Name())
+	}
 
 	return nil
 }
@@ -272,7 +275,7 @@ func (app *Application) CreateRequest() error {
 		ContentLength: inputFileSize,
 	}
 
-	err = app.save(app.RequestPath, app.Request.getFilePrefix(), app.Request)
+	err = app.save(app.HistoryPath, app.Request.getFilePrefix(), app.Request)
 	if err != nil {
 		return err
 	}
@@ -333,7 +336,7 @@ func (app *Application) SendRequest() error {
 		Request:       app.Request,
 	}
 
-	err = app.save(app.ResponsePath, app.Response.getFilePrefix(), app.Response)
+	err = app.save(app.HistoryPath, app.Response.getFilePrefix(), app.Response)
 	if err != nil {
 		return err
 	}
@@ -406,7 +409,8 @@ func (app *Application) Run() error {
 			return err
 		}
 	} else {
-		return errors.New("Invalid application mode. Use gohttp help for usage.")
+		// Default to help
+		app.RunHelp()
 	}
 
 	return nil
@@ -415,17 +419,17 @@ func (app *Application) Run() error {
 // Publicly exposed package entry point
 func Start() error {
 	home := os.Getenv("HOME")
-	requestPath := path.Join(home, ".gohttp/requests")
-	responsePath := path.Join(home, ".gohttp/responses")
+	historyPath := path.Join(home, ".gohttp/history")
 
 	app := &Application{
 		Name:           "gohttp",
 		Version:        "0.1.0",
-		Commands:       []string{"version", "help", "history"},
-		RequestMethods: []string{"head", "get", "post", "put", "patch", "delete"},
+		// help is first, because it's the default
+		Commands:       []string{"help", "version", "history"},
+		// GET is first, because it's the default
+		RequestMethods: []string{"get", "head", "post", "put", "patch", "delete"},
 		Args:           os.Args[1:],
-		RequestPath:    requestPath,
-		ResponsePath:   responsePath,
+		HistoryPath:    historyPath,
 	}
 
 	err := app.Run()
