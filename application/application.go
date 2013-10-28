@@ -191,7 +191,7 @@ func (app *Application) ParseArgs() error {
 	requestUrl := app.Args[urlIndex]
 	inputFilePath := app.getOption(inputFlagMap, "")
 	inputFileSize := int64(0)
-	outputFilePath := app.getOption(outputFlagMap, app.ResponsePath)
+	outputFilePath := app.getOption(outputFlagMap, "")
 	jsonContentType := app.flagIsActive(jsonFlagMap)
 	contentType := app.getOption(contentTypeFlagMap, "application/json")
 
