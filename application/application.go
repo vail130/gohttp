@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -18,7 +19,10 @@ import (
 type Application struct {
 	Name           string
 	Version        string
+	Commands       []string
+	RequestMethods []string
 	Args           []string
+	Mode           string
 	RequestPath    string
 	ResponsePath   string
 	InputFilePath  string
@@ -44,9 +48,27 @@ type Response struct {
 	Request       Request
 }
 
-/*
- * Private Functions
- */
+// Clean URL for file name
+func cleanUrl(url string) string {
+	re := regexp.MustCompile("[^a-zA-Z0-9_]")
+	cleanUrl := re.ReplaceAllString(url, "_")
+	re = regexp.MustCompile("_+")
+	return re.ReplaceAllString(cleanUrl, "_")
+}
+
+// Form file name prefix for request
+func (req *Request) getFilePrefix() string {
+	filePrefix := []string{"request__", req.Method, "__", cleanUrl(req.Url), "__"}
+	return strings.Join(filePrefix, "")
+}
+
+// Form file name prefix for response
+func (resp *Response) getFilePrefix() string {
+	filePrefix := []string{"response__", resp.Request.Method, "__", cleanUrl(resp.Request.Url), "__"}
+	return strings.Join(filePrefix, "")
+}
+
+// Determine if flag is active from command line args
 func (app *Application) flagIsActive(flagMap map[string]bool) bool {
 	flagIsActive := false
 	for i, j := 0, len(app.Args); i < j; i++ {
@@ -57,6 +79,7 @@ func (app *Application) flagIsActive(flagMap map[string]bool) bool {
 	return flagIsActive
 }
 
+// Get value for command line option
 func (app *Application) getOption(optMap map[string]bool, defaultValue string) string {
 	optValue := defaultValue
 	for i, j := 0, len(app.Args); i < j; i++ {
@@ -67,8 +90,8 @@ func (app *Application) getOption(optMap map[string]bool, defaultValue string) s
 	return optValue
 }
 
-func (app *Application) save(v interface{}, savePath string, name string) error {
-
+// Save object to a file
+func (app *Application) save(savePath string, prefix string, v interface{}) error {
 	jsonBytes, err := json.Marshal(v)
 	if err != nil {
 		return errors.New("Error creating response json: " + err.Error())
@@ -79,11 +102,11 @@ func (app *Application) save(v interface{}, savePath string, name string) error 
 	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
 	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
 	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	fileName := name + "__" + cleanTime + ".json"
+	fileName := prefix + cleanTime + ".json"
 
 	file, err := os.Create(path.Join(savePath, fileName))
 	if err != nil {
-		return errors.New("Error creating new " + name + " file: " + err.Error())
+		return errors.New("Error creating new " + prefix + " file: " + err.Error())
 	}
 	defer file.Close()
 
@@ -99,9 +122,7 @@ func (app *Application) save(v interface{}, savePath string, name string) error 
 	return nil
 }
 
-/*
- * Public Functions
- */
+// Make sure application dependency directories exist
 func (app *Application) SetupAppDirs() error {
 	err := os.MkdirAll(app.RequestPath, 0777)
 	if err != nil {
@@ -116,21 +137,69 @@ func (app *Application) SetupAppDirs() error {
 	return nil
 }
 
-func (app *Application) ParseArgs() error {
+// Determine desired operation
+func (app *Application) DetermineMode() error {
+	if len(app.Args) < 1 {
+		return errors.New("Invalid arguments. Try 'gohttp help' for usage details.")
+	}
+
+	for i, j := 0, len(app.Commands); i < j; i++ {
+		if app.Args[0] == app.Commands[i] {
+			app.Mode = app.Args[0]
+			break
+		}
+	}
+
+	if app.Mode == "" {
+		app.Mode = "http"
+	}
+
+	return nil
+}
+
+// Print version to console
+func (app *Application) ShowVersion() error {
+	fmt.Println(app.Name, "version", app.Version)
+	return nil
+}
+
+// Print help text to console
+func (app *Application) RunHelp() error {
+	fmt.Println("Usage:")
+	fmt.Println("	gohttp COMMAND OPTIONS")
+	fmt.Println("")
+	fmt.Println("Commands:")
+	fmt.Println("	version")
+	fmt.Println("	help")
+	fmt.Println("	history")
+	fmt.Println("	URL FLAGS")
+	fmt.Println("	get URL FLAGS")
+	fmt.Println("	head URL FLAGS")
+	fmt.Println("	post URL FLAGS")
+	fmt.Println("	put URL FLAGS")
+	fmt.Println("	patch URL FLAGS")
+	fmt.Println("	delete URL FLAGS")
+	fmt.Println("")
+	fmt.Println("Flags:")
+	fmt.Println("	-j | --json")
+	fmt.Println("	(-c | --content-type) application/json")
+	fmt.Println("	(-t | --timeout) 0 - 4294967295")
+	fmt.Println("	(-i | --input) /path/to/input/file.json")
+	fmt.Println("	(-o | --output) /path/to/output/file.json")
+	fmt.Println("")
+	return nil
+}
+
+// Show reverse chronological requests/responses
+func (app *Application) ShowHistory() error {
+
+	return nil
+}
+
+// Parse command line arguments
+func (app *Application) CreateRequest() error {
 	fmt.Println("Parsing arguments...")
 
-	if len(app.Args) < 1 {
-		return errors.New("No arguments. Try 'gohttp --help' for usage details.")
-	}
-
-	helpFlagMap := map[string]bool{
-		"-h":     true,
-		"--help": true,
-	}
-	versionFlagMap := map[string]bool{
-		"-v":        true,
-		"--version": true,
-	}
 	inputFlagMap := map[string]bool{
 		"-i":      true,
 		"--input": true,
@@ -148,31 +217,13 @@ func (app *Application) ParseArgs() error {
 		"--content-type": true,
 	}
 
-	if app.flagIsActive(helpFlagMap) {
-		fmt.Println("> gohttp (get | head | post | put | patch | delete) URL [")
-		fmt.Println("	[")
-		fmt.Println("		[(-j | --json) | ((-c | --content-type) application/json)]")
-		fmt.Println("	]")
-		fmt.Println("	[(-t | --timeout) 0 - 4294967295]")
-		fmt.Println("	[(-i | --input) /path/to/input/file.json]")
-		fmt.Println("	[(-o | --output) /path/to/output/file.json]")
-		fmt.Println("]")
-		os.Exit(0)
-	}
-
-	if app.flagIsActive(versionFlagMap) {
-		fmt.Println(app.Name, "version", app.Version)
-		os.Exit(0)
-	}
-
-	requestMethods := make([]string, 0, 5)
-	requestMethods = append(requestMethods, "get", "post", "put", "patch", "delete")
-	requestMethod := requestMethods[0]
+	requestMethod := app.RequestMethods[0]
 	requestMethodProvided := false
-	for i, j := 0, len(requestMethods); i < j; i++ {
-		if requestMethods[i] == app.Args[0] {
+	for i, j := 0, len(app.RequestMethods); i < j; i++ {
+		if app.RequestMethods[i] == app.Args[0] {
 			requestMethod = app.Args[0]
 			requestMethodProvided = true
+			break
 		}
 	}
 
@@ -181,7 +232,7 @@ func (app *Application) ParseArgs() error {
 		urlIndex = 1
 	}
 	if len(app.Args) < urlIndex+1 {
-		return errors.New("Invalid arguments. Try 'gohttp --help' for usage details.")
+		return errors.New("Invalid arguments. Try 'gohttp help' for usage details.")
 	}
 	_, err := url.Parse(app.Args[urlIndex])
 	if err != nil {
@@ -221,7 +272,7 @@ func (app *Application) ParseArgs() error {
 		ContentLength: inputFileSize,
 	}
 
-	err = app.save(app.Request, app.RequestPath, "request")
+	err = app.save(app.RequestPath, app.Request.getFilePrefix(), app.Request)
 	if err != nil {
 		return err
 	}
@@ -229,6 +280,7 @@ func (app *Application) ParseArgs() error {
 	return nil
 }
 
+// Send HTTP request
 func (app *Application) SendRequest() error {
 	fmt.Println("Sending request...")
 
@@ -281,7 +333,7 @@ func (app *Application) SendRequest() error {
 		Request:       app.Request,
 	}
 
-	err = app.save(app.Response, app.ResponsePath, "response")
+	err = app.save(app.ResponsePath, app.Response.getFilePrefix(), app.Response)
 	if err != nil {
 		return err
 	}
@@ -289,10 +341,10 @@ func (app *Application) SendRequest() error {
 	return nil
 }
 
+// Save HTTP response body to output file, if specified
 func (app *Application) SaveResponse() error {
-	fmt.Println("Saving response...")
-
 	if app.OutputFilePath != "" {
+		fmt.Println("Saving response data to output file...")
 		outputFile := new(os.File)
 		if _, err := os.Stat(app.OutputFilePath); os.IsNotExist(err) {
 			outputFile, err = os.Create(app.OutputFilePath)
@@ -311,6 +363,74 @@ func (app *Application) SaveResponse() error {
 		if err != nil {
 			return errors.New("Error writing to output file: " + err.Error())
 		}
+	}
+
+	return nil
+}
+
+// Application control flow method
+func (app *Application) Run() error {
+	err := app.SetupAppDirs()
+	if err != nil {
+		return err
+	}
+
+	err = app.DetermineMode()
+	if err != nil {
+		return err
+	}
+
+	if app.Mode == "help" {
+		app.RunHelp()
+	} else if app.Mode == "version" {
+		app.ShowVersion()
+	} else if app.Mode == "history" {
+		err := app.ShowHistory()
+		if err != nil {
+			return err
+		}
+
+	} else if app.Mode == "http" {
+		err := app.CreateRequest()
+		if err != nil {
+			return err
+		}
+
+		err = app.SendRequest()
+		if err != nil {
+			return err
+		}
+
+		err = app.SaveResponse()
+		if err != nil {
+			return err
+		}
+	} else {
+		return errors.New("Invalid application mode. Use gohttp help for usage.")
+	}
+
+	return nil
+}
+
+// Publicly exposed package entry point
+func Start() error {
+	home := os.Getenv("HOME")
+	requestPath := path.Join(home, ".gohttp/requests")
+	responsePath := path.Join(home, ".gohttp/responses")
+
+	app := &Application{
+		Name:           "gohttp",
+		Version:        "0.1.0",
+		Commands:       []string{"version", "help", "history"},
+		RequestMethods: []string{"head", "get", "post", "put", "patch", "delete"},
+		Args:           os.Args[1:],
+		RequestPath:    requestPath,
+		ResponsePath:   responsePath,
+	}
+
+	err := app.Run()
+	if err != nil {
+		return err
 	}
 
 	return nil

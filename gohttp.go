@@ -20,44 +20,12 @@ import (
 	"./application"
 	"log"
 	"os"
-	"path"
 )
 
 func main() {
-	home := os.Getenv("HOME")
-	requestPath := path.Join(home, ".gohttp/requests")
-	responsePath := path.Join(home, ".gohttp/responses")
-
-	app := &application.Application{
-		Name:         "gohttp",
-		Version:      "0.1.0",
-		Args:         os.Args[1:],
-		RequestPath:  requestPath,
-		ResponsePath: responsePath,
-	}
-
-	err := app.SetupAppDirs()
+	err := application.Start()
 	if err != nil {
 		log.Fatal(err.Error())
 		os.Exit(1)
 	}
-
-	err = app.ParseArgs()
-	if err != nil {
-		log.Fatal(err.Error())
-		os.Exit(1)
-	}
-
-	err = app.SendRequest()
-	if err != nil {
-		log.Fatal(err.Error())
-		os.Exit(1)
-	}
-
-	err = app.SaveResponse()
-	if err != nil {
-		log.Fatal(err.Error())
-		os.Exit(1)
-	}
-
 }
