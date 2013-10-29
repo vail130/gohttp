@@ -39,6 +39,7 @@ type Request struct {
 	Timeout       uint32
 	ContentType   string
 	ContentLength int64
+	RawRequest	  *http.Request
 }
 
 // Response data
@@ -47,6 +48,7 @@ type Response struct {
 	ContentLength uint32
 	Body          []byte
 	Request       Request
+	RawResponse   *http.Response
 }
 
 // Clean URL for file name
@@ -184,7 +186,7 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	(-l | --limit) 10")
 	fmt.Println("")
 	fmt.Println("HTTP Request Flags:")
-	fmt.Println("	-j | --json")
+	fmt.Println("	(-j | --json)")
 	fmt.Println("	(-c | --content-type) application/json")
 	fmt.Println("	(-t | --timeout) 0 - 4294967295")
 	fmt.Println("	(-i | --input) /path/to/input/file.json")
@@ -224,16 +226,24 @@ func (app *Application) ShowHistory() error {
 		}
 	}
 
-	numPrinted := 0
-	for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || numPrinted < limit); i-- {
-		fileName := fileInfos[i].Name()
-		if len(fileName) > 0 && string(fileName[0]) != "." {
-			flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
-			if findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1 {
-				label := strconv.Itoa(numPrinted+1)
-				fmt.Println(label+".", fileName)
-				numPrinted++
+	if len(fileInfos) == 0 {
+		fmt.Println("Nothing in history.")
+	} else {
+		numPrinted := 0
+		for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || numPrinted < limit); i-- {
+			fileName := fileInfos[i].Name()
+			if len(fileName) > 0 && string(fileName[0]) != "." {
+				flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
+				if findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1 {
+					label := strconv.Itoa(numPrinted+1)
+					fmt.Println(label+".", fileName)
+					numPrinted++
+				}
 			}
+		}
+
+		if numPrinted == 0 {
+			fmt.Println("No results matching criteria.")
 		}
 	}
 
@@ -355,6 +365,8 @@ func (app *Application) SendRequest() error {
 		req.Header.Add("Content-Type", app.Request.ContentType)
 	}
 
+	app.Request.RawRequest = req
+
 	transport := &http.Transport{
 		ResponseHeaderTimeout: time.Duration(app.Request.Timeout) * time.Second,
 	}
@@ -376,6 +388,7 @@ func (app *Application) SendRequest() error {
 		ContentLength: uint32(len(responseData)),
 		Body:          responseData,
 		Request:       app.Request,
+		RawResponse:   resp,
 	}
 
 	fileName := app.addTimeToFileName(app.Response.getFileName())
