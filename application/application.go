@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,14 +58,14 @@ func cleanUrl(url string) string {
 }
 
 // Form file name prefix for request
-func (req *Request) getFilePrefix() string {
-	filePrefix := []string{"request__", req.Method, "__", cleanUrl(req.Url), "__"}
+func (req *Request) getFileName() string {
+	filePrefix := []string{"request__", req.Method, "__", cleanUrl(req.Url)}
 	return strings.Join(filePrefix, "")
 }
 
 // Form file name prefix for response
-func (resp *Response) getFilePrefix() string {
-	filePrefix := []string{"response__", resp.Request.Method, "__", cleanUrl(resp.Request.Url), "__"}
+func (resp *Response) getFileName() string {
+	filePrefix := []string{"response__", resp.Request.Method, "__", cleanUrl(resp.Request.Url)}
 	return strings.Join(filePrefix, "")
 }
 
@@ -83,29 +85,33 @@ func (app *Application) getOption(optMap map[string]bool, defaultValue string) s
 	optValue := defaultValue
 	for i, j := 0, len(app.Args); i < j; i++ {
 		if _, present := optMap[app.Args[i]]; present && len(app.Args) > i {
-			defaultValue = app.Args[i+1]
+			optValue = app.Args[i+1]
+			break
 		}
 	}
 	return optValue
 }
 
+// Add date and time to file name
+func (app *Application) addTimeToFileName(name string) string {
+	now := time.Now()
+	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
+	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
+	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
+	return strings.Join([]string{cleanTime, "__", name, ".json"}, "")
+}
+
 // Save object to a file
-func (app *Application) save(savePath string, name string, v interface{}) error {
+func (app *Application) save(savePath string, fileName string, v interface{}) error {
 	jsonBytes, err := json.Marshal(v)
 	if err != nil {
 		return errors.New("Error creating response json: " + err.Error())
 	}
 	numJsonBytes := len(jsonBytes)
 
-	now := time.Now()
-	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
-	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
-	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	fileName := cleanTime + "__" + name + ".json"
-
 	file, err := os.Create(path.Join(savePath, fileName))
 	if err != nil {
-		return errors.New("Error creating new " + name + " file: " + err.Error())
+		return errors.New("Error creating new " + fileName + " file: " + err.Error())
 	}
 	defer file.Close()
 
@@ -173,7 +179,9 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	delete URL FLAGS")
 	fmt.Println("")
 	fmt.Println("History Flags:")
-	fmt.Println("	")
+	fmt.Println("	(-f | --find) GET")
+	fmt.Println("	(-i | --insensitive)")
+	fmt.Println("	(-l | --limit) 10")
 	fmt.Println("")
 	fmt.Println("HTTP Request Flags:")
 	fmt.Println("	-j | --json")
@@ -192,8 +200,41 @@ func (app *Application) ShowHistory() error {
 		return errors.New("Failed to read history directory: " + err.Error())
 	}
 
-	for i, j := 0, len(fileInfos); i < j; i++ {
-		fmt.Println(fileInfos[i].Name())
+	findOptMap := map[string]bool{
+		"-f":     true,
+		"--find": true,
+	}
+	caseFlagMap := map[string]bool{
+		"-i":            true,
+		"--insensitive": true,
+	}
+	limitOptMap := map[string]bool{
+		"-l":      true,
+		"--limit": true,
+	}
+
+	findOpt := app.getOption(findOptMap, "")
+	caseFlag := app.flagIsActive(caseFlagMap)
+	limitOpt := app.getOption(limitOptMap, "")
+	limit := 0
+	if limitOpt != "" {
+		limit, err = strconv.Atoi(limitOpt)
+		if err != nil {
+			limit = 0
+		}
+	}
+
+	numPrinted := 0
+	for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || numPrinted < limit); i-- {
+		fileName := fileInfos[i].Name()
+		if len(fileName) > 0 && string(fileName[0]) != "." {
+			flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
+			if findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1 {
+				label := strconv.Itoa(numPrinted+1)
+				fmt.Println(label+".", fileName)
+				numPrinted++
+			}
+		}
 	}
 
 	return nil
@@ -275,7 +316,8 @@ func (app *Application) CreateRequest() error {
 		ContentLength: inputFileSize,
 	}
 
-	err = app.save(app.HistoryPath, app.Request.getFilePrefix(), app.Request)
+	fileName := app.addTimeToFileName(app.Request.getFileName())
+	err = app.save(app.HistoryPath, fileName, app.Request)
 	if err != nil {
 		return err
 	}
@@ -336,35 +378,24 @@ func (app *Application) SendRequest() error {
 		Request:       app.Request,
 	}
 
-	err = app.save(app.HistoryPath, app.Response.getFilePrefix(), app.Response)
+	fileName := app.addTimeToFileName(app.Response.getFileName())
+	err = app.save(app.HistoryPath, fileName, app.Response)
 	if err != nil {
 		return err
 	}
 
-	return nil
-}
-
-// Save HTTP response body to output file, if specified
-func (app *Application) SaveResponse() error {
 	if app.OutputFilePath != "" {
-		fmt.Println("Saving response data to output file...")
-		outputFile := new(os.File)
-		if _, err := os.Stat(app.OutputFilePath); os.IsNotExist(err) {
-			outputFile, err = os.Create(app.OutputFilePath)
-			if err != nil {
-				return errors.New("Error creating new output file: " + err.Error())
-			}
-		} else {
-			outputFile, err = os.Open(app.OutputFilePath)
-			if err != nil {
-				return errors.New("Error opening output file " + app.OutputFilePath + "\n" + err.Error())
-			}
-		}
-		defer outputFile.Close()
+		dirName := filepath.Dir(app.OutputFilePath)
 
-		_, err := outputFile.Write(app.Response.Body)
+		err := os.MkdirAll(dirName, 0777)
 		if err != nil {
-			return errors.New("Error writing to output file: " + err.Error())
+			return errors.New("Failed to create directory " + dirName + "\n" + err.Error())
+		}
+
+		fileName := filepath.Base(app.OutputFilePath)
+		err = app.save(dirName, fileName, app.Response)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -403,11 +434,6 @@ func (app *Application) Run() error {
 		if err != nil {
 			return err
 		}
-
-		err = app.SaveResponse()
-		if err != nil {
-			return err
-		}
 	} else {
 		// Default to help
 		app.RunHelp()
@@ -424,9 +450,7 @@ func Start() error {
 	app := &Application{
 		Name:           "gohttp",
 		Version:        "0.1.0",
-		// help is first, because it's the default
 		Commands:       []string{"help", "version", "history"},
-		// GET is first, because it's the default
 		RequestMethods: []string{"get", "head", "post", "put", "patch", "delete"},
 		Args:           os.Args[1:],
 		HistoryPath:    historyPath,
