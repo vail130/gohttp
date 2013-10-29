@@ -39,7 +39,7 @@ type Request struct {
 	Timeout       uint32
 	ContentType   string
 	ContentLength int64
-	RawRequest	  *http.Request
+	RawRequest    *http.Request
 }
 
 // Response data
@@ -47,7 +47,6 @@ type Response struct {
 	ContentType   string
 	ContentLength uint32
 	Body          []byte
-	Request       Request
 	RawResponse   *http.Response
 }
 
@@ -59,16 +58,14 @@ func cleanUrl(url string) string {
 	return re.ReplaceAllString(cleanUrl, "_")
 }
 
-// Form file name prefix for request
-func (req *Request) getFileName() string {
-	filePrefix := []string{"request__", req.Method, "__", cleanUrl(req.Url)}
-	return strings.Join(filePrefix, "")
-}
-
-// Form file name prefix for response
-func (resp *Response) getFileName() string {
-	filePrefix := []string{"response__", resp.Request.Method, "__", cleanUrl(resp.Request.Url)}
-	return strings.Join(filePrefix, "")
+// Form history filename
+func (app *Application) getFileName() string {
+	now := time.Now()
+	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
+	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
+	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
+	fileName := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.Url), ".json"}
+	return strings.Join(fileName, "")
 }
 
 // Determine if flag is active from command line args
@@ -94,17 +91,8 @@ func (app *Application) getOption(optMap map[string]bool, defaultValue string) s
 	return optValue
 }
 
-// Add date and time to file name
-func (app *Application) addTimeToFileName(name string) string {
-	now := time.Now()
-	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
-	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
-	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	return strings.Join([]string{cleanTime, "__", name, ".json"}, "")
-}
-
 // Save object to a file
-func (app *Application) save(savePath string, fileName string, v interface{}) error {
+func (app *Application) saveJson(savePath string, fileName string, v interface{}) error {
 	jsonBytes, err := json.Marshal(v)
 	if err != nil {
 		return errors.New("Error creating response json: " + err.Error())
@@ -229,16 +217,19 @@ func (app *Application) ShowHistory() error {
 	if len(fileInfos) == 0 {
 		fmt.Println("Nothing in history.")
 	} else {
+		itemIndex := 0
 		numPrinted := 0
 		for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || numPrinted < limit); i-- {
 			fileName := fileInfos[i].Name()
 			if len(fileName) > 0 && string(fileName[0]) != "." {
 				flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
 				if findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1 {
-					label := strconv.Itoa(numPrinted+1)
+					label := strconv.Itoa(itemIndex + 1)
 					fmt.Println(label+".", fileName)
 					numPrinted++
 				}
+				// Keep numbers consistent for history items, regardless if filtering
+				itemIndex++
 			}
 		}
 
@@ -270,6 +261,10 @@ func (app *Application) CreateRequest() error {
 		"-c":             true,
 		"--content-type": true,
 	}
+	timeoutFlagMap := map[string]bool{
+		"-t":        true,
+		"--timeout": true,
+	}
 
 	requestMethod := app.RequestMethods[0]
 	requestMethodProvided := false
@@ -295,18 +290,42 @@ func (app *Application) CreateRequest() error {
 
 	requestUrl := app.Args[urlIndex]
 	inputFilePath := app.getOption(inputFlagMap, "")
-	inputFileSize := int64(0)
+	contentLength := int64(0)
+	requestData := make([]byte, 0)
 	outputFilePath := app.getOption(outputFlagMap, "")
 	jsonContentType := app.flagIsActive(jsonFlagMap)
 	contentType := app.getOption(contentTypeFlagMap, "application/json")
+	timeoutOpt := app.getOption(timeoutFlagMap, "0")
+	timeout, err := strconv.Atoi(timeoutOpt)
+	if err != nil || timeout < 1 {
+		timeout = 60
+	}
 
 	if inputFilePath != "" {
 		if fileInfo, err := os.Stat(inputFilePath); os.IsNotExist(err) {
 			inputFilePath = ""
 		} else {
-			inputFileSize = fileInfo.Size()
+			contentLength = fileInfo.Size()
+
+			body, err := os.Open(inputFilePath)
+			if err != nil {
+				return errors.New("Error opening file " + inputFilePath + "\n" + err.Error())
+			}
+			defer body.Close()
+
+			requestData = make([]byte, contentLength)
+			numBytesRead, err = body.Read(data)
+			if err != nil {
+				return errors.New("Error reading input file: " + err.Error())
+			}
+
+			if numBytesRead < contentLength {
+				return errors.New("Error reading input file: Read " +
+					strconv.Itoa(numBytesRead) + " out of " + strconv.Itoa(contentLength) + "bytes.")
+			}
 		}
 	}
+
 	requestContentType := ""
 	if jsonContentType {
 		requestContentType = "application/json"
@@ -321,15 +340,10 @@ func (app *Application) CreateRequest() error {
 	app.Request = Request{
 		Method:        strings.ToUpper(requestMethod),
 		Url:           requestUrl,
-		Timeout:       60,
+		Timeout:       timeout,
 		ContentType:   requestContentType,
-		ContentLength: inputFileSize,
-	}
-
-	fileName := app.addTimeToFileName(app.Request.getFileName())
-	err = app.save(app.HistoryPath, fileName, app.Request)
-	if err != nil {
-		return err
+		ContentLength: contentLength,
+		Body:          requestData,
 	}
 
 	return nil
@@ -339,24 +353,7 @@ func (app *Application) CreateRequest() error {
 func (app *Application) SendRequest() error {
 	fmt.Println("Sending request...")
 
-	emptyBytes := make([]byte, 0)
-	requestData := bytes.NewReader(emptyBytes)
-
-	if app.InputFilePath != "" {
-		body, err := os.Open(app.InputFilePath)
-		if err != nil {
-			return errors.New("Error opening file " + app.InputFilePath + "\n" + err.Error())
-		}
-		defer body.Close()
-
-		data := make([]byte, app.Request.ContentLength)
-		_, err = body.Read(data)
-		if err != nil {
-			return errors.New("Error reading input file: " + err.Error())
-		}
-		requestData = bytes.NewReader(data)
-	}
-
+	requestData := bytes.NewReader(app.Request.Body)
 	req, err := http.NewRequest(app.Request.Method, app.Request.Url, requestData)
 	if err != nil {
 		return errors.New("Error making new request object: " + err.Error())
@@ -383,16 +380,16 @@ func (app *Application) SendRequest() error {
 		return errors.New("Error reading response body: " + err.Error())
 	}
 
+	numResponseBytes := len(responseData)
 	app.Response = Response{
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: uint32(len(responseData)),
+		ContentLength: uint32(numResponseBytes),
 		Body:          responseData,
-		Request:       app.Request,
 		RawResponse:   resp,
 	}
 
-	fileName := app.addTimeToFileName(app.Response.getFileName())
-	err = app.save(app.HistoryPath, fileName, app.Response)
+	fileName := app.getFileName()
+	err = app.saveJson(app.HistoryPath, fileName, app)
 	if err != nil {
 		return err
 	}
@@ -406,7 +403,21 @@ func (app *Application) SendRequest() error {
 		}
 
 		fileName := filepath.Base(app.OutputFilePath)
-		err = app.save(dirName, fileName, app.Response)
+		file, err := os.Create(path.Join(dirName, fileName))
+		if err != nil {
+			return errors.New("Error creating new " + fileName + " file: " + err.Error())
+		}
+		defer file.Close()
+
+		numBytesWritten, err := file.Write(responseData)
+		if err != nil {
+			return errors.New("Error writing json data to file: " + err.Error())
+		}
+
+		if numBytesWritten < numResponseBytes {
+			return errors.New("Error writing data to output file: Not all data written to file.")
+		}
+
 		if err != nil {
 			return err
 		}
