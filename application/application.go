@@ -19,19 +19,22 @@ import (
 
 // Application state
 type Application struct {
-	Name           string
-	Version        string
-	Commands       []string
-	RequestMethods []string
-	Args           []string
-	Mode           string
-	HistoryMode    string
+	Name            string
+	Version         string
+	Commands        []string
+	RequestMethods  []string
+	Args            []string
+	StartTime       time.Time
+	EndTime         time.Time
+	Duration        time.Duration
+	Mode            string
+	HistoryMode     string
 	HistoryRecordId int
-	HistoryPath    string
-	InputFilePath  string
-	OutputFilePath string
-	Request        Request
-	Response       Response
+	HistoryPath     string
+	InputFilePath   string
+	OutputFilePath  string
+	Request         Request
+	Response        Response
 }
 
 // Data about the request to send
@@ -43,7 +46,6 @@ type Request struct {
 	Accept        string
 	ContentLength int
 	Body          []byte
-	RawRequest    *http.Request
 }
 
 // Response data
@@ -51,7 +53,6 @@ type Response struct {
 	ContentType   string
 	ContentLength int
 	Body          []byte
-	RawResponse   *http.Response
 }
 
 // Clean URL for file name
@@ -64,8 +65,7 @@ func cleanUrl(url string) string {
 
 // Form history filename
 func (app *Application) getFileName() string {
-	now := time.Now()
-	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
+	cleanTime := strings.Replace(app.StartTime.String()[:19], ":", "_", -1)
 	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
 	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
 	fileNameSlice := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.URL.String()), ".json"}
@@ -212,19 +212,6 @@ func (app *Application) RunHistory() error {
 
 	app.HistoryMode = historyMode
 
-	historyRecordId := 0
-	if app.HistoryMode == "detail" || app.HistoryMode == "replay" {
-		if len(app.Args) < 2 {
-			return errors.New("Missing history record ID.")
-		}
-
-		historyRecordId, err := strconv.Atoi(app.Args[2])
-		if err != nil {
-			return errors.New("Invalid history record ID. Must be an integer. " + err.Error())
-		}
-		app.HistoryRecordId = historyRecordId
-	}
-
 	if app.HistoryMode == "detail" {
 		err := app.RunHistoryDetail()
 		if err != nil {
@@ -246,30 +233,131 @@ func (app *Application) RunHistory() error {
 	return nil
 }
 
-// Show details of history request/response
-func (app *Application) RunHistoryDetail() error {
+func (app *Application) getHistoryRecords(skip int, limit int, find string, caseInsensitive bool) ([]os.FileInfo, []int, int, int, error) {
+	itemIndex := 0
+	numTotal := 0
+	numSkipped := 0
+	items := make([]os.FileInfo, 0, limit)
+	itemIndexes := make([]int, 0, limit)
+
 	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
 	if err != nil {
-		return errors.New("Failed to read history directory: " + err.Error())
+		return items, itemIndexes, numSkipped, numTotal, err
 	}
 
+	numTotal = len(fileInfos)
+	for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || len(items) < limit); i-- {
+		fileName := fileInfos[i].Name()
+		if len(fileName) > 0 && string(fileName[0]) != "." {
+			flagAndLowerExists := caseInsensitive && strings.Index(strings.ToLower(fileName), strings.ToLower(find)) > -1
+			if numSkipped >= skip && (find == "" || flagAndLowerExists || strings.Index(fileName, find) > -1) {
+				items = append(items, fileInfos[i])
+				label := itemIndex + 1
+				itemIndexes = append(itemIndexes, label)
+			} else {
+				numSkipped++
+			}
+			// Keep numbers consistent for history items, regardless if filtering
+			itemIndex++
+		}
+	}
+
+	return items, itemIndexes, numTotal, numSkipped, nil
+}
+
+// Load an app object from history file
+func (app *Application) loadAppFromHistory() (Application, error) {
+	historyApp := Application{}
+
+	if len(app.Args) < 3 {
+		return historyApp, errors.New("Missing history record index.")
+	}
+
+	historyIndex, err := strconv.Atoi(app.Args[2])
+	if err != nil {
+		return historyApp, err
+	}
+	app.HistoryRecordId = historyIndex
+
+	skip := 0
+	if historyIndex > 1 {
+		skip = historyIndex - 1
+	}
+	limit := 1
+
+	items, itemIndexes, _, _, err := app.getHistoryRecords(skip, limit, "", true)
+	if err != nil {
+		return historyApp, err
+	} else if len(items) != 1 || len(itemIndexes) != 1 {
+		return historyApp, errors.New("No history records found.")
+	} else if historyIndex != itemIndexes[0] {
+		return historyApp, errors.New("Invalid history record index: " + app.Args[2])
+	}
+	fileName := items[0].Name()
+	fileSize := items[0].Size()
+
+	file, err := os.Open(path.Join(app.HistoryPath, fileName))
+	if err != nil {
+		return historyApp, errors.New("Error opening history file " + fileName + "\n" + err.Error())
+	}
+	defer file.Close()
+
+	fileData := make([]byte, fileSize)
+	numBytesRead, err := file.Read(fileData)
+	if err != nil {
+		return historyApp, errors.New("Error reading history file: " + err.Error())
+	}
+
+	if numBytesRead < int(fileSize) {
+		return historyApp, errors.New("Error reading history file: Read " +
+			strconv.Itoa(numBytesRead) + " out of " + strconv.Itoa(int(fileSize)) + "bytes.")
+	}
+
+	// decoder := json.NewDecoder(file)
+	// if err := decoder.Decode(&historyApp); err != io.EOF && err != nil {
+	// 	return nil, err
+	// }
+
+	err = json.Unmarshal(fileData, &historyApp)
+	if err != nil {
+		return historyApp, errors.New("Error unmarshalling json: " + err.Error())
+	}
+
+	return historyApp, nil
+}
+
+// Show details of history request/response
+func (app *Application) RunHistoryDetail() error {
+	historyApp, err := app.loadAppFromHistory()
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Args:", historyApp.Args)
+	fmt.Println("Mode:", historyApp.Mode)
+	fmt.Println("Start Time:", historyApp.StartTime)
+	fmt.Println("End Time:", historyApp.EndTime)
+	fmt.Println("Duration:", historyApp.Duration)
+	fmt.Println("Request Method:", historyApp.Request.Method)
+	fmt.Println("Request URL:", historyApp.Request.URL)
+	fmt.Println("Response Content Type:", historyApp.Response.ContentType)
+	fmt.Println("Response Content Length:", historyApp.Response.ContentLength)
 
 	return nil
 }
 
 // Replay a request from history
 func (app *Application) RunHistoryReplay() error {
-	
+	// historyApp, err := app.loadAppFromHistory()
+	// if err != nil {
+	// 	return err
+	// }
+
 	return nil
 }
 
 // Show reverse chronological requests/responses
 func (app *Application) RunHistoryList() error {
-	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
-	if err != nil {
-		return errors.New("Failed to read history directory: " + err.Error())
-	}
-
 	findOptMap := map[string]bool{
 		"-f":     true,
 		"--find": true,
@@ -283,7 +371,7 @@ func (app *Application) RunHistoryList() error {
 		"--limit": true,
 	}
 	skipOptMap := map[string]bool{
-		"-s":      true,
+		"-s":     true,
 		"--skip": true,
 	}
 
@@ -292,6 +380,7 @@ func (app *Application) RunHistoryList() error {
 	limitOpt := app.getOption(limitOptMap, "")
 	skipOpt := app.getOption(skipOptMap, "")
 	limit := 10
+	var err error
 	if limitOpt != "" {
 		limit, err = strconv.Atoi(limitOpt)
 		if err != nil || limit < 1 {
@@ -306,34 +395,21 @@ func (app *Application) RunHistoryList() error {
 		}
 	}
 
-	if len(fileInfos) == 0 {
+	items, itemIndexes, numTotal, numSkipped, err := app.getHistoryRecords(skip, limit, findOpt, caseFlag)
+	if numTotal == 0 {
 		fmt.Println("Nothing in history.")
 	} else {
-		itemIndex := 0
-		numSkipped := 0
-		itemsToPrint := make([]string, 0, limit)
-		for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || len(itemsToPrint) < limit); i-- {
-			fileName := fileInfos[i].Name()
-			if len(fileName) > 0 && string(fileName[0]) != "." {
-				flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
-				if numSkipped >= skip && (findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1) {
-					label := strconv.Itoa(itemIndex + 1)
-					itemsToPrint = append(itemsToPrint, label+". "+fileName)
-				} else {
-					numSkipped++
-				}
-				// Keep numbers consistent for history items, regardless if filtering
-				itemIndex++
-			}
+		if err != nil {
+			return err
 		}
 
-		if len(itemsToPrint) == 0 {
+		if len(items) == 0 {
 			fmt.Println("No results matching criteria.")
 		} else {
-			fmt.Println("Displaying", numSkipped+1, "to", numSkipped+1+len(itemsToPrint), "of", len(fileInfos), "-", "Use skip and limit flags to page.")
+			fmt.Println("Displaying", numSkipped+1, "to", numSkipped+1+len(items), "of", numTotal, "-", "Use skip and limit flags to page.")
 			fmt.Println("")
-			for i, j := 0, len(itemsToPrint); i < j; i++ {
-				fmt.Println(itemsToPrint[i])
+			for i, j := 0, len(items); i < j; i++ {
+				fmt.Println(strconv.Itoa(itemIndexes[i]) + ". " + items[i].Name())
 			}
 		}
 	}
@@ -362,7 +438,7 @@ func (app *Application) CreateRequest() error {
 		"--content-type": true,
 	}
 	acceptOptMap := map[string]bool{
-		"-a":             true,
+		"-a":       true,
 		"--accept": true,
 	}
 	timeoutOptMap := map[string]bool{
@@ -504,8 +580,6 @@ func (app *Application) SendRequest() error {
 		req.Header.Add("Accept", app.Request.Accept)
 	}
 
-	app.Request.RawRequest = req
-
 	transport := &http.Transport{
 		ResponseHeaderTimeout: time.Duration(app.Request.Timeout) * time.Second,
 	}
@@ -527,7 +601,6 @@ func (app *Application) SendRequest() error {
 		ContentType:   resp.Header.Get("Content-Type"),
 		ContentLength: numResponseBytes,
 		Body:          responseData,
-		RawResponse:   resp,
 	}
 
 	if app.OutputFilePath != "" {
@@ -564,6 +637,9 @@ func (app *Application) SendRequest() error {
 
 // Application control flow method
 func (app *Application) Run() error {
+	startTime := time.Now()
+	app.StartTime = startTime
+
 	err := app.SetupAppDirs()
 	if err != nil {
 		return err
@@ -594,15 +670,20 @@ func (app *Application) Run() error {
 		if err != nil {
 			return err
 		}
+
+		endTime := time.Now()
+		duration := endTime.Sub(startTime)
+		app.EndTime = endTime
+		app.Duration = duration
+
+		fileName := app.getFileName()
+		err = app.saveJson(app.HistoryPath, fileName, app)
+		if err != nil {
+			return err
+		}
 	} else {
 		// Default to help
 		app.RunHelp()
-	}
-
-	fileName := app.getFileName()
-	err = app.saveJson(app.HistoryPath, fileName, app)
-	if err != nil {
-		return err
 	}
 
 	return nil

@@ -1,18 +1,43 @@
 /*
+A command line HTTP request/response management tool in Go.
+
+	Features:
+		- Make GET, HEAD, PUT, POST, PATCH, DELETE requests easily
+		- Use files as request body
+		- Save response body to file
+		- Automatic history saving
+		- Filter and page history
+		- See details and replay requests from history
+
 	Usage:
-		> gohttp
-			[get | head | post | put | patch | delete]
-			http://google.com
-			[-i | --input /path/to/input/file.json]
-			[-o | --output /path/to/output/file.json]
-			[-t | --timeout 60]
-			[-c | --content-type application/json]
+		gohttp COMMAND OPTIONS
 
-	- Request methods defaults to GET
-	- Determines Accept and Content-Type headers from input/output file extensions (txt, html, json, xml)
-	- Content type flag overrides extension
-	- If no output file specified, saves contents to ~/.gohttp/tmp, and prints only if content is under 100kb
+	Commands:
+		help
+		version
+		history FLAGS
+		URL FLAGS
+		get URL FLAGS
+		head URL FLAGS
+		post URL FLAGS
+		put URL FLAGS
+		patch URL FLAGS
+		delete URL FLAGS
 
+	History Flags:
+		(-f | --find) GET
+		(-i | --insensitive)
+		(-l | --limit) 10
+		(-s | --skip) 10
+
+	HTTP Flags:
+		(-j | --json)
+		(-c | --content-type) application/json
+		(-a | --accept) application/json
+		(-t | --timeout) 0 - 4294967295
+		(-i | --input) /path/to/input/file.json
+		(-o | --output) /path/to/output/file.json
+		(-d | --data) '{"key": "value"}'
 */
 package main
 
