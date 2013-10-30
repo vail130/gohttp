@@ -35,17 +35,19 @@ type Application struct {
 // Data about the request to send
 type Request struct {
 	Method        string
-	Url           string
-	Timeout       uint32
+	URL           *url.URL
+	Timeout       int
 	ContentType   string
-	ContentLength int64
+	Accept        string
+	ContentLength int
+	Body          []byte
 	RawRequest    *http.Request
 }
 
 // Response data
 type Response struct {
 	ContentType   string
-	ContentLength uint32
+	ContentLength int
 	Body          []byte
 	RawResponse   *http.Response
 }
@@ -64,8 +66,12 @@ func (app *Application) getFileName() string {
 	cleanTime := strings.Replace(now.String()[:19], ":", "_", -1)
 	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
 	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	fileName := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.Url), ".json"}
-	return strings.Join(fileName, "")
+	fileNameSlice := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.URL.String()), ".json"}
+	fileName := strings.Join(fileNameSlice, "")
+	if len(fileName) > 200 {
+		fileName = fileName[:200]
+	}
+	return fileName
 }
 
 // Determine if flag is active from command line args
@@ -146,7 +152,7 @@ func (app *Application) DetermineMode() error {
 }
 
 // Print version to console
-func (app *Application) ShowVersion() error {
+func (app *Application) RunVersion() error {
 	fmt.Println(app.Name, "version", app.Version)
 	return nil
 }
@@ -172,19 +178,22 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	(-f | --find) GET")
 	fmt.Println("	(-i | --insensitive)")
 	fmt.Println("	(-l | --limit) 10")
+	fmt.Println("	(-s | --skip) 10")
 	fmt.Println("")
-	fmt.Println("HTTP Request Flags:")
+	fmt.Println("HTTP Flags:")
 	fmt.Println("	(-j | --json)")
 	fmt.Println("	(-c | --content-type) application/json")
+	fmt.Println("	(-a | --accept) application/json")
 	fmt.Println("	(-t | --timeout) 0 - 4294967295")
 	fmt.Println("	(-i | --input) /path/to/input/file.json")
 	fmt.Println("	(-o | --output) /path/to/output/file.json")
+	fmt.Println("	(-d | --data) '{\"key\": \"value\"}'")
 	fmt.Println("")
 	return nil
 }
 
 // Show reverse chronological requests/responses
-func (app *Application) ShowHistory() error {
+func (app *Application) RunHistory() error {
 	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
 	if err != nil {
 		return errors.New("Failed to read history directory: " + err.Error())
@@ -202,15 +211,27 @@ func (app *Application) ShowHistory() error {
 		"-l":      true,
 		"--limit": true,
 	}
+	skipOptMap := map[string]bool{
+		"-s":      true,
+		"--skip": true,
+	}
 
 	findOpt := app.getOption(findOptMap, "")
 	caseFlag := app.flagIsActive(caseFlagMap)
 	limitOpt := app.getOption(limitOptMap, "")
-	limit := 0
+	skipOpt := app.getOption(skipOptMap, "")
+	limit := 10
 	if limitOpt != "" {
 		limit, err = strconv.Atoi(limitOpt)
-		if err != nil {
-			limit = 0
+		if err != nil || limit < 1 {
+			limit = 10
+		}
+	}
+	skip := 0
+	if skipOpt != "" {
+		skip, err = strconv.Atoi(skipOpt)
+		if err != nil || skip < 0 {
+			skip = 0
 		}
 	}
 
@@ -218,23 +239,31 @@ func (app *Application) ShowHistory() error {
 		fmt.Println("Nothing in history.")
 	} else {
 		itemIndex := 0
-		numPrinted := 0
-		for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || numPrinted < limit); i-- {
+		numSkipped := 0
+		itemsToPrint := make([]string, 0, limit)
+		for i, j := len(fileInfos)-1, 0; i >= j && (limit < 1 || len(itemsToPrint) < limit); i-- {
 			fileName := fileInfos[i].Name()
 			if len(fileName) > 0 && string(fileName[0]) != "." {
 				flagAndLowerExists := caseFlag && strings.Index(strings.ToLower(fileName), strings.ToLower(findOpt)) > -1
-				if findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1 {
+				if numSkipped >= skip && (findOpt == "" || flagAndLowerExists || strings.Index(fileName, findOpt) > -1) {
 					label := strconv.Itoa(itemIndex + 1)
-					fmt.Println(label+".", fileName)
-					numPrinted++
+					itemsToPrint = append(itemsToPrint, label+". "+fileName)
+				} else {
+					numSkipped++
 				}
 				// Keep numbers consistent for history items, regardless if filtering
 				itemIndex++
 			}
 		}
 
-		if numPrinted == 0 {
+		if len(itemsToPrint) == 0 {
 			fmt.Println("No results matching criteria.")
+		} else {
+			fmt.Println("Displaying", numSkipped+1, "to", numSkipped+1+len(itemsToPrint), "of", len(fileInfos), "-", "Use skip and limit flags to page.")
+			fmt.Println("")
+			for i, j := 0, len(itemsToPrint); i < j; i++ {
+				fmt.Println(itemsToPrint[i])
+			}
 		}
 	}
 
@@ -257,20 +286,28 @@ func (app *Application) CreateRequest() error {
 		"-j":     true,
 		"--json": true,
 	}
-	contentTypeFlagMap := map[string]bool{
+	contentTypeOptMap := map[string]bool{
 		"-c":             true,
 		"--content-type": true,
 	}
-	timeoutFlagMap := map[string]bool{
+	acceptOptMap := map[string]bool{
+		"-a":             true,
+		"--accept": true,
+	}
+	timeoutOptMap := map[string]bool{
 		"-t":        true,
 		"--timeout": true,
+	}
+	dataOptMap := map[string]bool{
+		"-d":     true,
+		"--data": true,
 	}
 
 	requestMethod := app.RequestMethods[0]
 	requestMethodProvided := false
 	for i, j := 0, len(app.RequestMethods); i < j; i++ {
-		if app.RequestMethods[i] == app.Args[0] {
-			requestMethod = app.Args[0]
+		if app.RequestMethods[i] == strings.ToUpper(app.Args[0]) {
+			requestMethod = strings.ToUpper(app.Args[0])
 			requestMethodProvided = true
 			break
 		}
@@ -283,65 +320,96 @@ func (app *Application) CreateRequest() error {
 	if len(app.Args) < urlIndex+1 {
 		return errors.New("Invalid arguments. Try 'gohttp help' for usage details.")
 	}
-	_, err := url.Parse(app.Args[urlIndex])
+	requestUrl, err := url.Parse(app.Args[urlIndex])
 	if err != nil {
 		return errors.New("Error parsing URL: " + err.Error())
 	}
+	// URL encode the query string
+	query := requestUrl.Query()
+	requestUrl.RawQuery = query.Encode()
 
-	requestUrl := app.Args[urlIndex]
 	inputFilePath := app.getOption(inputFlagMap, "")
-	contentLength := int64(0)
-	requestData := make([]byte, 0)
 	outputFilePath := app.getOption(outputFlagMap, "")
 	jsonContentType := app.flagIsActive(jsonFlagMap)
-	contentType := app.getOption(contentTypeFlagMap, "application/json")
-	timeoutOpt := app.getOption(timeoutFlagMap, "0")
+	contentType := app.getOption(contentTypeOptMap, "")
+	acceptOpt := app.getOption(acceptOptMap, "")
+	dataOpt := app.getOption(dataOptMap, "")
+	timeoutOpt := app.getOption(timeoutOptMap, "0")
 	timeout, err := strconv.Atoi(timeoutOpt)
 	if err != nil || timeout < 1 {
 		timeout = 60
 	}
 
-	if inputFilePath != "" {
-		if fileInfo, err := os.Stat(inputFilePath); os.IsNotExist(err) {
-			inputFilePath = ""
-		} else {
-			contentLength = fileInfo.Size()
-
-			body, err := os.Open(inputFilePath)
-			if err != nil {
-				return errors.New("Error opening file " + inputFilePath + "\n" + err.Error())
-			}
-			defer body.Close()
-
+	contentLength := 0
+	requestData := make([]byte, 0)
+	if requestMethod == "POST" || requestMethod == "PATCH" || requestMethod == "PUT" {
+		if dataOpt != "" {
+			contentLength = len(dataOpt)
 			requestData = make([]byte, contentLength)
-			numBytesRead, err = body.Read(data)
+			reader := strings.NewReader(dataOpt)
+			numBytesRead, err := reader.Read(requestData)
 			if err != nil {
-				return errors.New("Error reading input file: " + err.Error())
+				return errors.New("Error reading input data: " + err.Error())
 			}
 
 			if numBytesRead < contentLength {
-				return errors.New("Error reading input file: Read " +
+				return errors.New("Error reading input data: Read " +
 					strconv.Itoa(numBytesRead) + " out of " + strconv.Itoa(contentLength) + "bytes.")
 			}
+
+		} else if inputFilePath != "" {
+			if fileInfo, err := os.Stat(inputFilePath); os.IsNotExist(err) {
+				inputFilePath = ""
+			} else {
+				contentLength = int(fileInfo.Size())
+
+				body, err := os.Open(inputFilePath)
+				if err != nil {
+					return errors.New("Error opening file " + inputFilePath + "\n" + err.Error())
+				}
+				defer body.Close()
+
+				requestData = make([]byte, contentLength)
+				numBytesRead, err := body.Read(requestData)
+				if err != nil {
+					return errors.New("Error reading input file: " + err.Error())
+				}
+
+				if numBytesRead < contentLength {
+					return errors.New("Error reading input file: Read " +
+						strconv.Itoa(numBytesRead) + " out of " + strconv.Itoa(contentLength) + "bytes.")
+				}
+			}
 		}
+	} else if dataOpt != "" {
+		return errors.New("Data flag is only valid for POST, PATCH, and PUT requests.")
 	}
 
 	requestContentType := ""
 	if jsonContentType {
 		requestContentType = "application/json"
-	}
-	if contentType != "" {
+	} else if contentType != "" {
 		requestContentType = contentType
+	} else if requestMethod == "POST" || requestMethod == "PATCH" || requestMethod == "PUT" {
+		requestContentType = "application/json"
+	} else {
+		requestContentType = "application/x-www-form-urlencoded"
+	}
+
+	accept := "*/*"
+	if acceptOpt != "" {
+		accept = acceptOpt
 	}
 
 	app.InputFilePath = inputFilePath
 	app.OutputFilePath = outputFilePath
 
 	app.Request = Request{
-		Method:        strings.ToUpper(requestMethod),
-		Url:           requestUrl,
+		Method:        requestMethod,
+		URL:           requestUrl,
 		Timeout:       timeout,
 		ContentType:   requestContentType,
+		Accept:        accept,
 		ContentLength: contentLength,
 		Body:          requestData,
 	}
@@ -354,12 +422,15 @@ func (app *Application) SendRequest() error {
 	fmt.Println("Sending request...")
 
 	requestData := bytes.NewReader(app.Request.Body)
-	req, err := http.NewRequest(app.Request.Method, app.Request.Url, requestData)
+	req, err := http.NewRequest(app.Request.Method, app.Request.URL.String(), requestData)
 	if err != nil {
 		return errors.New("Error making new request object: " + err.Error())
 	}
 	if app.Request.ContentType != "" {
 		req.Header.Add("Content-Type", app.Request.ContentType)
+	}
+	if app.Request.Accept != "" {
+		req.Header.Add("Accept", app.Request.Accept)
 	}
 
 	app.Request.RawRequest = req
@@ -383,7 +454,7 @@ func (app *Application) SendRequest() error {
 	numResponseBytes := len(responseData)
 	app.Response = Response{
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: uint32(numResponseBytes),
+		ContentLength: numResponseBytes,
 		Body:          responseData,
 		RawResponse:   resp,
 	}
@@ -441,9 +512,9 @@ func (app *Application) Run() error {
 	if app.Mode == "help" {
 		app.RunHelp()
 	} else if app.Mode == "version" {
-		app.ShowVersion()
+		app.RunVersion()
 	} else if app.Mode == "history" {
-		err := app.ShowHistory()
+		err := app.RunHistory()
 		if err != nil {
 			return err
 		}
@@ -475,7 +546,7 @@ func Start() error {
 		Name:           "gohttp",
 		Version:        "0.1.0",
 		Commands:       []string{"help", "version", "history"},
-		RequestMethods: []string{"get", "head", "post", "put", "patch", "delete"},
+		RequestMethods: []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"},
 		Args:           os.Args[1:],
 		HistoryPath:    historyPath,
 	}
