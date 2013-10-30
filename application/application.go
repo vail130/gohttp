@@ -25,6 +25,8 @@ type Application struct {
 	RequestMethods []string
 	Args           []string
 	Mode           string
+	HistoryMode    string
+	HistoryRecordId int
 	HistoryPath    string
 	InputFilePath  string
 	OutputFilePath string
@@ -138,8 +140,8 @@ func (app *Application) DetermineMode() error {
 		app.Mode = "help"
 	} else {
 		for i, j := 0, len(app.Commands); i < j; i++ {
-			if app.Args[0] == app.Commands[i] {
-				app.Mode = app.Args[0]
+			if strings.ToLower(app.Args[0]) == app.Commands[i] {
+				app.Mode = strings.ToLower(app.Args[0])
 				break
 			}
 		}
@@ -192,8 +194,77 @@ func (app *Application) RunHelp() error {
 	return nil
 }
 
-// Show reverse chronological requests/responses
+// Determine history mode
 func (app *Application) RunHistory() error {
+	historyModeMap := map[string]bool{
+		"list":   true,
+		"detail": true,
+		"replay": true,
+	}
+
+	historyMode := "list"
+	if len(app.Args) > 1 {
+		lowerArg := strings.ToLower(app.Args[1])
+		if _, present := historyModeMap[lowerArg]; present {
+			historyMode = lowerArg
+		}
+	}
+
+	app.HistoryMode = historyMode
+
+	historyRecordId := 0
+	if app.HistoryMode == "detail" || app.HistoryMode == "replay" {
+		if len(app.Args) < 2 {
+			return errors.New("Missing history record ID.")
+		}
+
+		historyRecordId, err := strconv.Atoi(app.Args[2])
+		if err != nil {
+			return errors.New("Invalid history record ID. Must be an integer. " + err.Error())
+		}
+		app.HistoryRecordId = historyRecordId
+	}
+
+	if app.HistoryMode == "detail" {
+		err := app.RunHistoryDetail()
+		if err != nil {
+			return err
+		}
+	} else if app.HistoryMode == "replay" {
+		err := app.RunHistoryReplay()
+		if err != nil {
+			return err
+		}
+	} else {
+		// Default to list
+		err := app.RunHistoryList()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Show details of history request/response
+func (app *Application) RunHistoryDetail() error {
+	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
+	if err != nil {
+		return errors.New("Failed to read history directory: " + err.Error())
+	}
+
+
+	return nil
+}
+
+// Replay a request from history
+func (app *Application) RunHistoryReplay() error {
+	
+	return nil
+}
+
+// Show reverse chronological requests/responses
+func (app *Application) RunHistoryList() error {
 	fileInfos, err := ioutil.ReadDir(app.HistoryPath)
 	if err != nil {
 		return errors.New("Failed to read history directory: " + err.Error())
@@ -459,12 +530,6 @@ func (app *Application) SendRequest() error {
 		RawResponse:   resp,
 	}
 
-	fileName := app.getFileName()
-	err = app.saveJson(app.HistoryPath, fileName, app)
-	if err != nil {
-		return err
-	}
-
 	if app.OutputFilePath != "" {
 		dirName := filepath.Dir(app.OutputFilePath)
 
@@ -532,6 +597,12 @@ func (app *Application) Run() error {
 	} else {
 		// Default to help
 		app.RunHelp()
+	}
+
+	fileName := app.getFileName()
+	err = app.saveJson(app.HistoryPath, fileName, app)
+	if err != nil {
+		return err
 	}
 
 	return nil
