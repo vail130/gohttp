@@ -24,6 +24,7 @@ type Request struct {
 	Accept        string
 	ContentLength int
 	Body          []byte
+	PrintResponse bool
 }
 
 // Response data
@@ -48,6 +49,10 @@ func (app *Application) CreateRequest() error {
 	jsonFlagMap := map[string]bool{
 		"-j":     true,
 		"--json": true,
+	}
+	printFlagMap := map[string]bool{
+		"-p":     true,
+		"--print": true,
 	}
 	contentTypeOptMap := map[string]bool{
 		"-c":             true,
@@ -94,6 +99,7 @@ func (app *Application) CreateRequest() error {
 	inputFilePath := app.getOption(inputFlagMap, "")
 	outputFilePath := app.getOption(outputFlagMap, "")
 	jsonContentType := app.flagIsActive(jsonFlagMap)
+	printFlag := app.flagIsActive(printFlagMap)
 	contentType := app.getOption(contentTypeOptMap, "")
 	acceptOpt := app.getOption(acceptOptMap, "")
 	dataOpt := app.getOption(dataOptMap, "")
@@ -174,6 +180,7 @@ func (app *Application) CreateRequest() error {
 		ContentType:   requestContentType,
 		Accept:        accept,
 		ContentLength: contentLength,
+		PrintResponse: printFlag,
 		Body:          requestData,
 	}
 
@@ -189,34 +196,29 @@ func (app *Application) SendRequest() error {
 		return err
 	}
 
-	if app.OutputFilePath != "" {
-		dirName := filepath.Dir(app.OutputFilePath)
-
-		err := os.MkdirAll(dirName, 0777)
-		if err != nil {
-			return errors.New("Failed to create directory " + dirName + "\n" + err.Error())
+	if app.Request.PrintResponse {
+		printResult := true
+		if app.Response.ContentLength > 1024*100 {
+			fmt.Println("The response is " + strconv.Itoa(app.Response.ContentLength) +
+				" bytes. Are you sure you want to print it?")
+			fmt.Print("Y/n?  ")
+			var s string
+			for {
+				if s == "Y" || s == "n" { break }
+				fmt.Scanf("%s", &s)
+			}
+			printResult = s == "Y"
 		}
-
-		fileName := filepath.Base(app.OutputFilePath)
-		file, err := os.Create(path.Join(dirName, fileName))
-		if err != nil {
-			return errors.New("Error creating new " + fileName + " file: " + err.Error())
-		}
-		defer file.Close()
-
-		numBytesWritten, err := file.Write(app.Response.Body)
-		if err != nil {
-			return errors.New("Error writing json data to file: " + err.Error())
-		}
-
-		if numBytesWritten < app.Response.ContentLength {
-			return errors.New("Error writing data to output file: Not all data written to file.")
-		}
-
-		if err != nil {
-			return err
+		if printResult {
+			s := string(app.Response.Body[:app.Response.ContentLength])
+			fmt.Println(s)
 		}
 	}
+
+	err = app.saveToOutputFile()
+	if err != nil {
+		return err
+		}
 
 	return nil
 }
@@ -264,3 +266,37 @@ func (app *Application) loadAndSendHttpRequest() error {
 	}
 	return nil
 }
+
+func (app *Application) saveToOutputFile() error {
+	if app.OutputFilePath != "" {
+		dirName := filepath.Dir(app.OutputFilePath)
+
+		err := os.MkdirAll(dirName, 0777)
+		if err != nil {
+			return errors.New("Failed to create directory " + dirName + "\n" + err.Error())
+		}
+
+		fileName := filepath.Base(app.OutputFilePath)
+		file, err := os.Create(path.Join(dirName, fileName))
+		if err != nil {
+			return errors.New("Error creating new " + fileName + " file: " + err.Error())
+		}
+		defer file.Close()
+
+		numBytesWritten, err := file.Write(app.Response.Body)
+		if err != nil {
+			return errors.New("Error writing json data to file: " + err.Error())
+		}
+
+		if numBytesWritten < app.Response.ContentLength {
+			return errors.New("Error writing data to output file: Not all data written to file.")
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+

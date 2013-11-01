@@ -38,6 +38,7 @@ A command line HTTP request/response management tool in Go.
 		(-i | --input) /path/to/input/file.json
 		(-o | --output) /path/to/output/file.json
 		(-d | --data) '{"key": "value"}'
+    	(-p | --print)
 */
 package main
 

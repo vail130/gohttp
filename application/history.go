@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,28 @@ func (app *Application) RunHistoryReplay() error {
 	}
 
 	err = app.SaveApp()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Save a response from history to output file
+func (app *Application) RunHistorySave() error {
+	historyApp, err := app.loadAppFromHistory()
+	if err != nil {
+		return err
+	}
+
+	if len(app.Args) < 4 {
+		return errors.New("Missing output file path argument.")
+	}
+
+	historyApp.OutputFilePath = filepath.Clean(app.Args[3])
+
+	fmt.Println("Saving history record's response data to file: " + historyApp.OutputFilePath)
+	err = historyApp.saveToOutputFile()
 	if err != nil {
 		return err
 	}

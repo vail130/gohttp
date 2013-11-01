@@ -155,6 +155,7 @@ func (app *Application) RunHelp() error {
 	fmt.Println("	(-i | --input) /path/to/input/file.json")
 	fmt.Println("	(-o | --output) /path/to/output/file.json")
 	fmt.Println("	(-d | --data) '{\"key\": \"value\"}'")
+	fmt.Println("	(-p | --print)")
 	fmt.Println("")
 	return nil
 }
@@ -165,6 +166,7 @@ func (app *Application) RunHistory() error {
 		"list":   true,
 		"detail": true,
 		"replay": true,
+		"save":   true,
 	}
 
 	app.HistoryMode = "list"
@@ -182,6 +184,11 @@ func (app *Application) RunHistory() error {
 		}
 	} else if app.HistoryMode == "replay" {
 		err := app.RunHistoryReplay()
+		if err != nil {
+			return err
+		}
+	} else if app.HistoryMode == "save" {
+		err := app.RunHistorySave()
 		if err != nil {
 			return err
 		}
@@ -241,12 +248,12 @@ func (app *Application) getFileName() string {
 	cleanTime := strings.Replace(app.StartTime.String()[:19], ":", "_", -1)
 	cleanTime = strings.Replace(cleanTime, " ", "_", -1)
 	cleanTime = strings.Replace(cleanTime, "-", "_", -1)
-	fileNameSlice := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.URL.String()), ".json"}
+	fileNameSlice := []string{cleanTime, "__", app.Request.Method, "__", cleanUrl(app.Request.URL.String())}
 	fileName := strings.Join(fileNameSlice, "")
-	if len(fileName) > 200 {
-		fileName = fileName[:200]
+	if len(fileName) > 196 {
+		fileName = fileName[:196]
 	}
-	return fileName
+	return fileName + ".json"
 }
 
 // Clean URL for file name
