@@ -16,16 +16,24 @@ Usage:
     gohttp COMMAND OPTIONS
 
 Commands:
-- help
+- [help]
 - version
-- history FLAGS
-- URL FLAGS
-- get URL FLAGS
+- history
+- [REQUESTMETHOD] URL
+
+HTTP Commands:
+- [get] URL FLAGS
 - head URL FLAGS
 - post URL FLAGS
 - put URL FLAGS
 - patch URL FLAGS
 - delete URL FLAGS
+
+History commands:
+- history [list] FLAGS
+- history detail 1
+- history replay 1
+- history save 1 /path/to/output/file.json
 
 History Flags:
 - (-f | --find) GET

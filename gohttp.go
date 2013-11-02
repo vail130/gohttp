@@ -9,15 +9,20 @@ A command line HTTP request/response management tool in Go.
 		- Filter and page history
 		- See details and replay requests from history
 
-	Usage:
-		gohttp COMMAND OPTIONS
-
 	Commands:
-		help
+		[help]
 		version
-		history FLAGS
-		URL FLAGS
-		get URL FLAGS
+		history
+		[REQUESTMETHOD] URL
+
+	History commands:
+		history [list] FLAGS
+		history detail 1
+		history replay 1
+		history save 1 /path/to/output/file.json
+
+	HTTP Commands:
+		[get] URL FLAGS
 		head URL FLAGS
 		post URL FLAGS
 		put URL FLAGS
@@ -38,7 +43,7 @@ A command line HTTP request/response management tool in Go.
 		(-i | --input) /path/to/input/file.json
 		(-o | --output) /path/to/output/file.json
 		(-d | --data) '{"key": "value"}'
-    	(-p | --print)
+		(-p | --print)
 */
 package main
 
